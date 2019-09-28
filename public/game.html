@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+
+const SCREEN_WIDTH = 128;
+const SCREEN_HEIGHT = 128;
+
+const KEY_TRANSLATION_TABLE = {
+	// Directions
+	37: 1, // key-left
+	38: 2, // key-up
+	39: 4, // key-right
+	40: 8, // key-down
+	
+	// A
+	32: 16, // space maps to "A"
+	13: 16, // enter maps to "A"
+	88: 16, // X maps to "A"
+
+	// B
+	65: 32, // A maps to "B"
+	83: 32, // S maps to "B"
+
+	// Start
+	27: 64, // ESC maps to "START"
+	81: 64, // Q maps to "START"
+
+	// Select
+	87: 128, // W maps to "SELECT"
+}
+
+
+async function createWebAssembly(path, importObject) {
+	const result = await window.fetch(path);
+	const bytes = await result.arrayBuffer();
+	return WebAssembly.instantiate(bytes, importObject);
+}
+
+function controller_updater(input_ref, memory) {
+	let localKeyState = 0;
+	let remoteKeyState = new Uint8ClampedArray(memory.buffer, input_ref, 1);
+	
+	document.addEventListener("keydown", (e) => {
+		if (e.keyCode in KEY_TRANSLATION_TABLE) {
+			e.preventDefault();
+			localKeyState |= KEY_TRANSLATION_TABLE[e.keyCode];
+		}
+	});
+	
+	document.addEventListener("keyup", (e) => {
+		if (e.keyCode in KEY_TRANSLATION_TABLE) {
+			e.preventDefault();
+			localKeyState &= ~KEY_TRANSLATION_TABLE[e.keyCode];
+		}
+	});
+
+	return () => {
+		remoteKeyState[0] = localKeyState;
+	}
+}
+
+function screen_updater(screen_ref, memory) {
+	const pixelArray = new Uint8ClampedArray(memory.buffer, screen_ref, 4 * SCREEN_WIDTH * SCREEN_HEIGHT);
+	const imgData = new ImageData(pixelArray, SCREEN_WIDTH, SCREEN_HEIGHT);
+	const canvas = document.getElementById('canvas').getContext('2d');
+	canvas.globalCompositeOperation = 'copy';
+	
+	return () => {
+		canvas.putImageData(imgData, 0, 0);
+	}
+}
+
+function time_updater(time_ref, memory) {
+	let state = new Uint32Array(memory.buffer, time_ref, 4);
+	const initial_time = +new Date();
+	return () => {
+		state[0] = (+new Date()) - initial_time;
+	}
+}
+
+function init_random(seed_ref, memory) {
+	let state = new Uint32Array(memory.buffer, seed_ref, 4);
+	state[0] = Math.ceil(Math.random() * Math.pow(2, 32));
+}
+
+async function init() {
+	const app = await createWebAssembly('main.wasm', {});
+	const exports = app.instance.exports;
+	exports._init();
+	
+	const screen_ref = exports._get_screen_ref();
+	const input_ref = exports._get_input_ref();
+	const time_ref = exports._get_time_ref();
+	const seed_ref = exports._get_seed_ref();
+	console.log("Module initialized. Screen at " + screen_ref + ", controller at " + input_ref);
+	
+	init_random(seed_ref, exports.memory)
+	const update_controller = controller_updater(input_ref, exports.memory);
+	const update_screen = screen_updater(screen_ref, exports.memory);
+	const update_time = time_updater(time_ref, exports.memory);
+	const update_game = exports._update;
+
+	let skipNextFrame = false;
+	function update() {
+		skipNextFrame = !skipNextFrame;
+		if (skipNextFrame) {
+			update_controller();
+			update_time();
+			update_game();
+			update_screen();	
+		}
+		window.requestAnimationFrame(update)
+	}
+	update();
+}
+
+window.onload = () => {
+	init();
+}
+
+</script>
+</head>
+<body bgcolor="#000000">
+
+<canvas 
+	id="canvas" 
+	style="image-rendering: optimizeSpeed; image-rendering: -moz-crisp-edges; image-rendering: -webkit-optimize-contrast; image-rendering: optimize-contrast; image-rendering: pixelated; -ms-interpolation-mode: nearest-neighbor; border: 3px solid white; width: 512px; height: 512px;margin: 50px auto 10px auto;display:block;" 
+	width="128" height="128"></canvas>
+
+	<div class="info" style="color: #909090; margin: 0 auto; width: 512px; margin-top: 20px;font-size: 10pt;">
+		A space-invaders-like game for the web, written in C, compiled to web assembly. No stdlib used. Learn more on <a href="https://github.com/JanSiebert/wasm-space-invaders" target="_blank" style="color: #0000ff;text-decoration: none;">Github</a>.
+	</div>
+</body>
+</html>
